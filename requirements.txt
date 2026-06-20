@@ -1,0 +1,20 @@
+# Stable Audio 3 plug-in — isolated sidecar environment.
+#
+# This list documents what plugins/stable-audio-3/.venv contains. Do NOT install
+# these into the main OmniVoice venv: SA3 pins torch 2.7.x, which conflicts with
+# OmniVoice's torch pin. The bootstrap script builds a fully separate venv so the
+# two never collide.
+#
+# Install with: ./bootstrap.sh  (handles the torch CUDA index + flash-attn)
+#
+# Platform matrix (chosen automatically by bootstrap.sh from `uname -m`):
+#   x86_64   torch==2.7.1 / torchaudio==2.7.1  (cu126 index) + flash-attn 2.6.3
+#            prebuilt wheel (cu126 / torch2.7 / cp310). Matches SA3's own pin.
+#   aarch64  torch==2.10.0 / torchaudio==2.10.0 (cu130 index) for NVIDIA
+#            Grace-Blackwell (GB10 "DGX Spark" / EdgeXpert, GH200). torch 2.7.x
+#            has no aarch64 CUDA wheels, so SA3 is installed with --no-deps to
+#            override its torch==2.7.1 pin; flash-attn is skipped (no aarch64
+#            wheel) and SA3 falls back to torch SDPA.
+#
+# stable-audio-3 runtime deps (installed for you): einops, einops-exts, numpy,
+# packaging, safetensors, tqdm, huggingface-hub, transformers, soundfile.

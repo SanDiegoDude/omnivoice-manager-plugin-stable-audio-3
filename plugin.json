@@ -1,0 +1,50 @@
+{
+  "id": "stable-audio-3",
+  "name": "Stable Audio 3",
+  "version": "0.1.0",
+  "description": "Text-to-audio foley, SFX, music, instrument loops and one-shots via Stable Audio 3 Medium. Runs fully isolated in its own venv.",
+  "author": "Stability AI (model) · OmniVoice plug-in",
+  "homepage": "https://github.com/Stability-AI/stable-audio-3",
+  "source": "https://github.com/SanDiegoDude/omnivoice-manager-plugin-stable-audio-3",
+  "license": "Apache-2.0 (plug-in code) · Stability AI Community License (model)",
+  "isolation": "sidecar",
+  "entrypoint": "sidecar.py",
+  "python": ".venv/bin/python",
+  "gpu": true,
+  "vram_mb": 6500,
+  "supports_low_vram": true,
+  "supports_cpu_offload": false,
+  "capabilities": ["generate"],
+  "needs": {
+    "model": "stabilityai/stable-audio-3-medium",
+    "model_gated": true,
+    "model_url": "https://huggingface.co/stabilityai/stable-audio-3-medium",
+    "help": "HELP.html",
+    "bootstrap": "./bootstrap.sh"
+  },
+  "ui": {
+    "kind": "audio-generator",
+    "contributions": [
+      { "slot": "sound.library.action", "label": "Sound Lab — Stable Audio 3", "icon": "🎛", "opens": "lab" },
+      { "slot": "track.menu.empty", "label": "Sound Lab — Stable Audio 3", "icon": "🎛", "opens": "lab" }
+    ],
+    "lab": {
+      "title": "Sound Lab — Stable Audio 3",
+      "filename_from": "prompt",
+      "categories": [
+        { "id": "One-shot", "placeholder": "e.g. metallic impact, short and bright" },
+        { "id": "SFX", "placeholder": "e.g. heavy wooden door creaking open in an old stone hall, reverberant" },
+        { "id": "Music", "placeholder": "e.g. suspenseful cinematic strings, dangerous scary cellos and violins" },
+        { "id": "Instrument", "placeholder": "e.g. warm analog synth bass loop, punchy" }
+      ],
+      "fields": [
+        { "key": "prompt", "type": "textarea", "label": "Describe the sound", "primary": true, "rows": 3 },
+        { "key": "duration", "type": "number", "label": "Length", "unit": "sec", "min": 0.5, "step": 0.01, "default": 3 },
+        { "key": "steps", "type": "number", "label": "Steps", "min": 1, "max": 100, "default": 8, "advanced": true },
+        { "key": "cfg", "type": "number", "label": "CFG", "min": 0, "max": 15, "step": 0.5, "default": 1, "advanced": true },
+        { "key": "seed", "type": "seed", "label": "Seed", "advanced": true }
+      ],
+      "reprompt": true
+    }
+  }
+}

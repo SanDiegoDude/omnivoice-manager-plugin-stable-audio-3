@@ -1,0 +1,5 @@
+# The isolated sidecar env is built locally by bootstrap.sh — never commit it.
+.venv/
+__pycache__/
+*.pyc
+.DS_Store

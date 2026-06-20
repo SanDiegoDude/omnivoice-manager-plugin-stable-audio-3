@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Stable Audio 3 — gated model troubleshooting</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2.5rem 1.25rem 5rem;
+    background: hsl(222 22% 9%); color: hsl(210 16% 86%);
+    font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; color: #fff; }
+  h2 { font-size: 1.15rem; margin: 2.2rem 0 .6rem; color: hsl(184 60% 70%); }
+  .lede { color: hsl(210 12% 64%); margin: 0 0 1.5rem; }
+  a { color: hsl(199 90% 66%); }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  code { background: hsl(222 18% 16%); padding: .1em .4em; border-radius: 4px; font-size: .9em; }
+  pre {
+    background: hsl(222 24% 13%); border: 1px solid hsl(222 18% 20%);
+    border-radius: 8px; padding: .9rem 1rem; overflow-x: auto; font-size: .86rem;
+  }
+  pre code { background: none; padding: 0; }
+  ol, ul { padding-left: 1.3rem; }
+  li { margin: .35rem 0; }
+  .note {
+    border-left: 3px solid hsl(184 60% 50%); background: hsl(184 30% 12%);
+    padding: .7rem 1rem; border-radius: 0 8px 8px 0; margin: 1rem 0;
+  }
+  .warn { border-left-color: hsl(38 80% 55%); background: hsl(38 40% 12%); }
+  kbd { background: hsl(222 18% 18%); border: 1px solid hsl(222 14% 28%); border-bottom-width: 2px;
+        border-radius: 5px; padding: .05em .45em; font-size: .85em; }
+  hr { border: none; border-top: 1px solid hsl(222 16% 18%); margin: 2.4rem 0; }
+  .foot { color: hsl(210 10% 50%); font-size: .85rem; margin-top: 2.5rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Stable Audio 3 — gated model troubleshooting</h1>
+  <p class="lede">
+    SA3 Medium weights are <strong>gated</strong> on Hugging Face. OmniVoice
+    auto-downloads them the first time you generate (just like the built-in TTS
+    models), but that download only works once you've accepted the license
+    <em>and</em> your machine is authenticated. If you're seeing the "weights are
+    gated" note in Sound Lab, one of those two pieces is missing.
+  </p>
+
+  <h2>1. Accept the license</h2>
+  <ol>
+    <li>Open the model page:
+      <a href="https://huggingface.co/stabilityai/stable-audio-3-medium" target="_blank" rel="noopener">
+        huggingface.co/stabilityai/stable-audio-3-medium</a></li>
+    <li>Sign in to Hugging Face (top right).</li>
+    <li>Read and accept the license / "Agree and access repository" prompt near the top of the page.</li>
+  </ol>
+  <div class="note">
+    Access is usually granted instantly, but some gated repos require a short
+    manual review. If the page says <em>"Your request to access this repo has been
+    submitted / is awaiting review"</em>, you'll have to wait for the approval email
+    before the download can succeed.
+  </div>
+
+  <h2>2. Authenticate this machine (the most common cause)</h2>
+  <p>
+    Accepting the license in your browser is <strong>not enough</strong> — the
+    download runs from the command line / sidecar, so it needs a token. Create a
+    read token at
+    <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener">huggingface.co/settings/tokens</a>,
+    then either log in once:
+  </p>
+<pre><code>huggingface-cli login
+# paste your hf_... token when prompted</code></pre>
+  <p>…or export it in the shell that launches OmniVoice before starting it:</p>
+<pre><code>export HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxx
+# then (re)start the OmniVoice manager so the sidecar inherits it</code></pre>
+  <div class="note warn">
+    If you already "signed in" in the browser but still get the gated error, this
+    step is almost certainly what's missing — the CLI / sidecar has no token.
+  </div>
+
+  <h2>3. Confirm it worked</h2>
+<pre><code>huggingface-cli whoami        # should print your username
+huggingface-cli download stabilityai/stable-audio-3-medium --revision main \
+  --include "model_config.json"   # should download, not 401/403</code></pre>
+
+  <h2>4. Manual / offline download (worst case)</h2>
+  <p>If auto-download still won't cooperate, pull the weights yourself. The plug-in
+     ships a helper that builds its env and fetches the model:</p>
+<pre><code>cd plugins/stable-audio-3
+export HF_TOKEN=hf_xxxxxxxxxxxx
+./bootstrap.sh --with-model</code></pre>
+  <p>Or grab the snapshot directly with the HF CLI:</p>
+<pre><code>export HF_TOKEN=hf_xxxxxxxxxxxx
+huggingface-cli download stabilityai/stable-audio-3-medium</code></pre>
+  <p>
+    Files land in your Hugging Face cache —
+    <code>$HF_HOME/hub</code> or <code>~/.cache/huggingface/hub</code> — under
+    <code>models--stabilityai--stable-audio-3-medium</code>. Once a real
+    <code>*.safetensors</code> weight file is present there, OmniVoice detects it
+    and the gated note disappears on its own (no restart needed — it re-checks on
+    the next Sound Lab open).
+  </p>
+
+  <h2>Common gotchas</h2>
+  <ul>
+    <li><strong>Token has no read scope</strong> — recreate it as a <em>Read</em> token.</li>
+    <li><strong>Behind a proxy / no internet</strong> on the box running OmniVoice — use the manual download on a connected machine and copy the cache folder over.</li>
+    <li><strong>Disk full / interrupted download</strong> — look for stray <code>*.incomplete</code> files in the cache and delete them, then retry.</li>
+    <li><strong>Wrong account</strong> — the account that accepted the license must match the token (<code>huggingface-cli whoami</code>).</li>
+  </ul>
+
+  <hr />
+  <p class="foot">
+    Still stuck? Check the manager log for the exact Hugging Face error
+    (<code>GatedRepoError</code>, <code>401</code>, <code>403</code>) — it tells you
+    whether it's a license issue (accept it) or an auth issue (token).
+  </p>
+</main>
+</body>
+</html>
