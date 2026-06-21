@@ -70,7 +70,10 @@ curl -X POST http://localhost:8200/api/plugins/install \
 cd /path/to/OmniVoice-Manager/plugins
 git clone https://github.com/SanDiegoDude/omnivoice-manager-plugin-stable-audio-3 stable-audio-3
 cd stable-audio-3
+# Linux / macOS:
 ./bootstrap.sh        # builds the isolated .venv (add --with-model to pre-fetch weights)
+# Windows:
+bootstrap.bat         # same, in PowerShell under the hood (bootstrap.bat --with-model)
 ```
 
 ### 3. Copy / installer
@@ -84,26 +87,40 @@ After installing, the plug-in appears automatically in OmniVoice (Sound Library 
 
 ---
 
-## Building the sidecar environment (`bootstrap.sh`)
+## Building the sidecar environment
 
-`bootstrap.sh` creates `./.venv` with the right torch build for your platform and
-installs `stable-audio-3`. It is re-runnable / idempotent.
+The bootstrap creates `./.venv` with the right torch build for your platform and
+installs `stable-audio-3`. It is re-runnable / idempotent. Use `bootstrap.sh` on
+Linux/macOS and `bootstrap.bat` on Windows (a thin launcher over `bootstrap.ps1`).
 
-| Platform | torch | Notes |
-| --- | --- | --- |
-| Linux **x86_64** | `2.7.1` (cu126) | + prebuilt flash-attn 2 wheel (matches SA3's pin) |
-| Linux **aarch64** (GB10 "DGX Spark"/EdgeXpert, GH200) | `2.10.0` (cu130) | torch 2.7.x has no aarch64 CUDA wheels; SA3 installed with `--no-deps` to override its pin. flash-attn falls back to torch SDPA |
+| Platform | Script | torch | Notes |
+| --- | --- | --- | --- |
+| Linux **x86_64** | `bootstrap.sh` | `2.7.1` (cu126) | + prebuilt flash-attn 2 wheel (matches SA3's pin) |
+| Linux **aarch64** (GB10 "DGX Spark"/EdgeXpert, GH200) | `bootstrap.sh` | `2.10.0` (cu130) | torch 2.7.x has no aarch64 CUDA wheels; SA3 installed with `--no-deps` to override its pin. flash-attn falls back to torch SDPA |
+| **Windows x86_64** | `bootstrap.bat` | `2.7.1` (cu126) | flash-attn skipped (no maintained Windows wheel) → torch SDPA. Set `SA3_FLASH_WHEEL` to install one |
 
 ```bash
+# Linux / macOS
 ./bootstrap.sh                 # build the env (no model download)
 ./bootstrap.sh --with-model    # also download SA3 Medium (needs an HF token)
 ```
 
-**Overrides (env):** `SA3_CUDA`, `SA3_TORCH`, `SA3_PYTHON`, `SA3_FLASH_WHEEL`.
-For an optional flash-attn source build on Blackwell ARM (~60–75 min; SDPA is
+```bat
+rem Windows (cmd)
+bootstrap.bat
+bootstrap.bat --with-model
+```
+
+**Overrides (env):** `SA3_CUDA`, `SA3_TORCH`, `SA3_PYTHON`, `SA3_FLASH_WHEEL`
+(all platforms; on Windows set them with `set SA3_CUDA=cu126` before the call).
+For an optional flash-attn **source** build on Blackwell ARM (~60–75 min; SDPA is
 already fast and numerically identical there): `SA3_BUILD_FLASH=1`
 `SA3_FLASH_VER=2.8.3` `SA3_FLASH_ARCH=12.0` (sm_120 runs on GB10's sm_121 via
 CUDA forward-compat; use `9.0` for GH200) `MAX_JOBS=4` `CUDA_HOME=/usr/local/cuda`.
+
+> **Prerequisites on Windows:** a recent NVIDIA driver, [Git](https://git-scm.com)
+> (the install pulls `stable-audio-3` from GitHub), and either [`uv`](https://docs.astral.sh/uv/)
+> or a Python 3.10 install with the `py` launcher. PowerShell 5+ ships with Windows.
 
 ---
 
