@@ -44,9 +44,73 @@ class StableAudio3:
         self._sr = 44100
 
     # ---- lifecycle ----
+    def _model_repo(self) -> str:
+        """The HuggingFace repo id for the weights (so we can pre-fetch with
+        progress before handing off to from_pretrained)."""
+        repo = os.environ.get("SA3_REPO")
+        if repo:
+            return repo
+        return MODEL_ID if "/" in MODEL_ID else f"stabilityai/stable-audio-3-{MODEL_ID}"
+
+    def _prefetch_weights(self, ctx) -> None:
+        """Download the model snapshot up-front, surfacing live progress.
+
+        HuggingFace's own tqdm writes to stderr (the plug-in log only), so a
+        download looks like a frozen spinner from the app/CLI. Routing
+        ``snapshot_download`` through a tqdm subclass lets us report real % into
+        ``ctx.progress`` — which shows in the Sound Lab modal and the job poll.
+        Cached weights make this a fast no-op. Download failures (gated repo, no
+        token, network) propagate so the host can surface the gate help."""
+        repo = self._model_repo()
+        try:
+            from huggingface_hub import snapshot_download
+            from tqdm.auto import tqdm as _tqdm
+        except Exception as e:  # noqa: BLE001
+            ctx.log(f"download-progress unavailable ({e}); deferring to from_pretrained", "warn")
+            return
+
+        import time
+
+        state = {"pct": -1, "t": 0.0}
+
+        def report(n: int, total: int) -> None:
+            if not total:
+                return
+            pct = int(n * 100 / total)
+            now = time.monotonic()
+            if pct == state["pct"] and now - state["t"] < 1.0:
+                return
+            state["pct"], state["t"] = pct, now
+            msg = f"Downloading model… {pct}% ({n / 1048576:.0f}/{total / 1048576:.0f} MB)"
+            ctx.progress(stage="downloading_model", message=msg, percent=pct)
+            ctx.log(msg)
+
+        class _ProgressTqdm(_tqdm):
+            def __init__(self, *a, **k):
+                k["disable"] = False  # force n/total updates even off a TTY
+                super().__init__(*a, **k)
+
+            def display(self, *a, **k):
+                try:
+                    # Only the per-file byte bars, not the "Fetching N files" counter.
+                    if self.total and getattr(self, "unit", "") == "B":
+                        report(self.n, self.total)
+                except Exception:  # noqa: BLE001
+                    pass
+                return super().display(*a, **k)
+
+        ctx.progress(stage="downloading_model", message="Preparing model weights…")
+        ctx.log(f"Ensuring model weights present: {repo}")
+        try:
+            snapshot_download(repo, tqdm_class=_ProgressTqdm)
+        except TypeError:
+            snapshot_download(repo)  # hub without tqdm_class kwarg — fetch sans %
+        ctx.log("Model weights present.")
+
     def _ensure_model(self, ctx):
         if self._model is not None:
             return self._model
+        self._prefetch_weights(ctx)
         ctx.progress(stage="loading_model", message=f"Loading Stable Audio 3 ({MODEL_ID})…")
         ctx.log(f"Loading Stable Audio 3 model '{MODEL_ID}'")
         from stable_audio_3 import StableAudioModel
