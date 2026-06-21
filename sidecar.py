@@ -9,9 +9,17 @@ fully isolated in its own venv (torch 2.7.x + flash-attn 2 on x86_64; torch
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import os
 import sys
+
+# macOS / Apple Silicon: SA3 runs on the Metal (MPS) backend, where a handful of
+# ops the model uses aren't implemented yet. Allow torch to silently fall back to
+# CPU for those ops instead of hard-crashing mid-generation — the difference is
+# slower, not broken. Harmless on CUDA/CPU (the flag is MPS-only). Must be set
+# before torch is imported anywhere, so do it at module import time.
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 # The host exports OMNIVOICE_PLUGIN_SDK; make the SDK importable even if launched
 # directly for debugging.
@@ -22,6 +30,34 @@ if _sdk and _sdk not in sys.path:
 from omnivoice_plugin import run  # noqa: E402
 
 MODEL_ID = os.environ.get("SA3_MODEL", "medium")
+
+
+@contextlib.contextmanager
+def _stdout_to_stderr():
+    """Divert Python-level stdout to stderr for the wrapped block.
+
+    The stable_audio_3 package prints diagnostics straight to stdout (flash-attn
+    import notices on load; a CUDA-centric "without a GPU … not designed to run
+    on cpu" warning that also fires on MPS). The host protocol reserves stdout
+    for JSON, so those prints would be stray noise on the wire. The SDK captured
+    the real stdout at startup, so its protocol writes are unaffected — only the
+    library's prints get routed to stderr → the plug-in's log file."""
+    saved = sys.stdout
+    sys.stdout = sys.stderr
+    try:
+        yield
+    finally:
+        sys.stdout = saved
+
+
+def _mps_available() -> bool:
+    """True on Apple Silicon when the Metal (MPS) backend is usable."""
+    try:
+        import torch
+
+        return bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available())
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _filter_kwargs(fn, kwargs: dict) -> dict:
@@ -113,16 +149,25 @@ class StableAudio3:
         self._prefetch_weights(ctx)
         ctx.progress(stage="loading_model", message=f"Loading Stable Audio 3 ({MODEL_ID})…")
         ctx.log(f"Loading Stable Audio 3 model '{MODEL_ID}'")
-        from stable_audio_3 import StableAudioModel
+        # SA3's import + load print library diagnostics to stdout; keep them off
+        # the protocol stream (they land in the plug-in log instead).
+        with _stdout_to_stderr():
+            from stable_audio_3 import StableAudioModel
 
-        self._model = StableAudioModel.from_pretrained(MODEL_ID)
+            # device=None lets SA3 auto-select: cuda → mps (Apple Silicon) → cpu.
+            # On non-CUDA it also forces full precision (model_half=False).
+            self._model = StableAudioModel.from_pretrained(MODEL_ID)
         # Resolve the model's native sample rate when it exposes one.
         for attr in ("sample_rate", "sampling_rate", "sr"):
             v = getattr(self._model, attr, None)
             if isinstance(v, int) and v > 0:
                 self._sr = v
                 break
-        ctx.log(f"Model loaded (sample_rate={self._sr})")
+        device = getattr(self._model, "device", "?")
+        ctx.log(f"Model loaded (device={device}, sample_rate={self._sr})")
+        if str(device) == "mps":
+            ctx.log("Running on Apple Silicon (MPS) — generation is functional but "
+                    "much slower than a discrete GPU; long takes need patience.", "warn")
         return self._model
 
     def load(self, ctx):
@@ -135,6 +180,11 @@ class StableAudio3:
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+            # Free the Metal (MPS) allocator's cache on Apple Silicon too — the
+            # symmetric counterpart to cuda.empty_cache() so the host's GPU
+            # serialization actually reclaims unified memory on a Mac.
+            if _mps_available():
+                torch.mps.empty_cache()
         except Exception:  # noqa: BLE001
             pass
 
@@ -144,7 +194,14 @@ class StableAudio3:
             import torch
 
             info["cuda"] = bool(torch.cuda.is_available())
+            info["mps"] = _mps_available()
             info["torch"] = torch.__version__
+            # The compute device SA3 selected (cuda → mps → cpu). Read it off the
+            # loaded model when present; otherwise report what we'd pick.
+            if self._model is not None and getattr(self._model, "device", None):
+                info["device"] = str(self._model.device)
+            else:
+                info["device"] = "cuda" if torch.cuda.is_available() else ("mps" if info["mps"] else "cpu")
             if torch.cuda.is_available():
                 free, total = torch.cuda.mem_get_info()
                 info["vram_free_mb"] = int(free // (1024 * 1024))
@@ -242,7 +299,8 @@ class StableAudio3:
         kwargs = _filter_kwargs(model.generate, candidate)
         ctx.log(f"generate kwargs: {sorted(kwargs)} (steps={steps}, cfg={cfg}, dur={duration}, sample_size={sample_size})")
 
-        out = model.generate(**kwargs)
+        with _stdout_to_stderr():
+            out = model.generate(**kwargs)
         wav, sr = self._normalize_output(out)
 
         out_path = ctx.tmp_path(".wav")

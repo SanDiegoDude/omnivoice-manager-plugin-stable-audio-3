@@ -19,6 +19,15 @@
 #                            prebuilt wheel and 2.6.3 predates Blackwell, so it's
 #                            skipped — SA3 falls back to torch SDPA (set
 #                            SA3_BUILD_FLASH=1 to attempt a source build).
+#   • macOS arm64         → torch 2.7.1 from the DEFAULT PyPI index (NOT a CUDA
+#     (Apple Silicon)       index — there is no CUDA on a Mac). torch's macOS
+#                            arm64 wheels live on PyPI and match SA3's 2.7.1 pin,
+#                            so its deps resolve normally. SA3 auto-selects the
+#                            Metal (MPS) backend; there is no flash-attn for
+#                            macOS, so it uses torch SDPA. Expect MVP-grade
+#                            speed: generation works but is far slower than a
+#                            discrete NVIDIA GPU — see the sidecar's MPS CPU
+#                            fallback (PYTORCH_ENABLE_MPS_FALLBACK).
 #
 # Usage:
 #   ./bootstrap.sh                 # build the env (no model download)
@@ -44,28 +53,48 @@ log() { printf '\n\033[1;36m[sa3-bootstrap]\033[0m %s\n' "$*"; }
 warn() { printf '\n\033[1;33m[sa3-bootstrap]\033[0m %s\n' "$*"; }
 
 # ── Platform → torch build matrix ─────────────────────────────────────────────
+OS="$(uname -s)"
 ARCH="$(uname -m)"
 # SA3_NO_DEPS=1 means torch != SA3's pinned 2.7.1, so install the package without
 # letting it drag torch back, and provide its other runtime deps ourselves.
 SA3_NO_DEPS=0
-case "$ARCH" in
-  x86_64)
-    CUDA="${SA3_CUDA:-cu126}"
-    TORCH_VER="${SA3_TORCH:-2.7.1}"
-    ;;
-  aarch64|arm64)
-    CUDA="${SA3_CUDA:-cu130}"
-    TORCH_VER="${SA3_TORCH:-2.10.0}"
-    SA3_NO_DEPS=1
-    log "Detected Linux ARM ($ARCH) — using torch $TORCH_VER ($CUDA) for NVIDIA Grace-Blackwell (DGX Spark / GH200)."
-    ;;
-  *)
-    warn "Unrecognized arch '$ARCH' — defaulting to cu126 / torch 2.7.1. Override with SA3_CUDA / SA3_TORCH if this is wrong."
-    CUDA="${SA3_CUDA:-cu126}"
-    TORCH_VER="${SA3_TORCH:-2.7.1}"
-    ;;
-esac
-TORCH_INDEX="https://download.pytorch.org/whl/$CUDA"
+# TORCH_INDEX="" means "use the default PyPI index" (macOS — torch's Mac wheels
+# are NOT on a CUDA index). Otherwise it's the pytorch.org CUDA wheel index.
+TORCH_INDEX=""
+
+if [[ "$OS" == "Darwin" ]]; then
+  # macOS: no CUDA. Apple Silicon runs the model on the Metal (MPS) backend,
+  # which SA3 selects automatically. torch's macOS wheels are on the default
+  # PyPI index, so we install torch WITHOUT --index-url and let SA3's deps
+  # resolve normally against its 2.7.1 pin (which has macOS arm64 wheels).
+  CUDA="cpu"   # informational only; there is no CUDA here
+  TORCH_VER="${SA3_TORCH:-2.7.1}"
+  if [[ "$ARCH" != "arm64" ]]; then
+    warn "macOS on '$ARCH' (Intel): torch dropped x86_64 macOS wheels after 2.2 and there is no MPS — SA3 is unsupported here and the install may fail. Apple Silicon (arm64) is the supported Mac target."
+  fi
+  log "Detected macOS ($ARCH) — torch $TORCH_VER from PyPI, Metal/MPS backend (no CUDA, no flash-attn). Generation works but is much slower than an NVIDIA GPU."
+else
+  case "$ARCH" in
+    x86_64)
+      CUDA="${SA3_CUDA:-cu126}"
+      TORCH_VER="${SA3_TORCH:-2.7.1}"
+      TORCH_INDEX="https://download.pytorch.org/whl/$CUDA"
+      ;;
+    aarch64|arm64)
+      CUDA="${SA3_CUDA:-cu130}"
+      TORCH_VER="${SA3_TORCH:-2.10.0}"
+      SA3_NO_DEPS=1
+      TORCH_INDEX="https://download.pytorch.org/whl/$CUDA"
+      log "Detected Linux ARM ($ARCH) — using torch $TORCH_VER ($CUDA) for NVIDIA Grace-Blackwell (DGX Spark / GH200)."
+      ;;
+    *)
+      warn "Unrecognized arch '$ARCH' — defaulting to cu126 / torch 2.7.1. Override with SA3_CUDA / SA3_TORCH if this is wrong."
+      CUDA="${SA3_CUDA:-cu126}"
+      TORCH_VER="${SA3_TORCH:-2.7.1}"
+      TORCH_INDEX="https://download.pytorch.org/whl/$CUDA"
+      ;;
+  esac
+fi
 
 # Prebuilt flash-attn wheel matching CUDA / torch / python (linux x86_64, cp310).
 FLASH_WHEEL="${SA3_FLASH_WHEEL:-https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.6.3+cu126torch2.7-cp310-cp310-linux_x86_64.whl}"
@@ -101,7 +130,12 @@ else
 fi
 
 log "Installing torch $TORCH_VER ($CUDA) ..."
-"${PIP[@]}" "torch==$TORCH_VER" "torchaudio==$TORCH_VER" --index-url "$TORCH_INDEX"
+if [[ -n "$TORCH_INDEX" ]]; then
+  "${PIP[@]}" "torch==$TORCH_VER" "torchaudio==$TORCH_VER" --index-url "$TORCH_INDEX"
+else
+  # macOS: default PyPI index (torch's Mac wheels are not on a CUDA index).
+  "${PIP[@]}" "torch==$TORCH_VER" "torchaudio==$TORCH_VER"
+fi
 
 if [[ "$SA3_NO_DEPS" == "1" ]]; then
   log "Installing stable-audio-3 (--no-deps; keeps our torch $TORCH_VER) ..."
@@ -122,7 +156,9 @@ fi
 # (often faster) and numerically identical to FA2 — so SDPA is the sane default.
 # Opt into a source build with SA3_BUILD_FLASH=1 (Blackwell needs ~60–75 min on
 # the Grace CPU; requires the CUDA toolkit / nvcc installed).
-if [[ "${SA3_BUILD_FLASH:-0}" == "1" ]]; then
+if [[ "$OS" == "Darwin" ]]; then
+  warn "Skipping flash-attn on macOS (no Mac build; needs CUDA) — SA3 uses torch SDPA on the MPS backend, which is correct here."
+elif [[ "${SA3_BUILD_FLASH:-0}" == "1" ]]; then
   # sm_121 (GB10) has no flash-attn kernels and the arch whitelist rejects 12.1;
   # build for sm_120 instead — it's binary-compatible with sm_121 via CUDA
   # forward compat. Override SA3_FLASH_ARCH for other parts (e.g. "9.0" GH200).
@@ -140,7 +176,7 @@ if [[ "${SA3_BUILD_FLASH:-0}" == "1" ]]; then
   else
     warn "flash-attn source build failed — SA3 will fall back to torch SDPA (fine on Blackwell). Check that nvcc / the CUDA toolkit is installed."
   fi
-elif [[ "$ARCH" == "x86_64" ]]; then
+elif [[ "$OS" == "Linux" && "$ARCH" == "x86_64" ]]; then
   log "Installing flash-attn (prebuilt wheel) ..."
   "${PIP[@]}" "$FLASH_WHEEL" || \
     warn "Prebuilt flash-attn wheel failed — SA3 will fall back to torch SDPA. See README to build from source."
@@ -151,7 +187,9 @@ fi
 log "Verifying imports ..."
 "$VENV/bin/python" - <<'PYEOF'
 import torch
-print("torch", torch.__version__, "cuda", torch.version.cuda, "avail", torch.cuda.is_available())
+mps = bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available())
+print("torch", torch.__version__, "cuda", torch.version.cuda,
+      "cuda_avail", torch.cuda.is_available(), "mps_avail", mps)
 try:
     import flash_attn
     print("flash_attn", flash_attn.__version__)

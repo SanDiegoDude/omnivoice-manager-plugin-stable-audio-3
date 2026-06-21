@@ -37,8 +37,12 @@ multitrack entry points) declaratively through its `plugin.json` manifest.
 
 - A working **OmniVoice Manager** install (this plug-in lives inside its
   `plugins/` directory).
-- An **NVIDIA GPU with CUDA** (x86_64 or ARM64 / Grace-Blackwell — see below).
-  ~6.5 GB VRAM for SA3 Medium; honors the host's low-VRAM mode.
+- One of:
+  - An **NVIDIA GPU with CUDA** (x86_64 or ARM64 / Grace-Blackwell — see below).
+    ~6.5 GB VRAM for SA3 Medium; honors the host's low-VRAM mode. **Recommended.**
+  - An **Apple Silicon Mac** (M-series). SA3 runs on the **Metal (MPS)** backend
+    — functional but **much slower** than a discrete GPU. Bring patience; see
+    [macOS / Apple Silicon](#macos--apple-silicon-mps).
 - A Hugging Face account that has **accepted the SA3 Medium license** (the weights
   are gated). See [Gated model setup](#gated-model-setup).
 
@@ -97,6 +101,7 @@ Linux/macOS and `bootstrap.bat` on Windows (a thin launcher over `bootstrap.ps1`
 | --- | --- | --- | --- |
 | Linux **x86_64** | `bootstrap.sh` | `2.7.1` (cu126) | + prebuilt flash-attn 2 wheel (matches SA3's pin) |
 | Linux **aarch64** (GB10 "DGX Spark"/EdgeXpert, GH200) | `bootstrap.sh` | `2.10.0` (cu130) | torch 2.7.x has no aarch64 CUDA wheels; SA3 installed with `--no-deps` to override its pin. flash-attn falls back to torch SDPA |
+| **macOS arm64** (Apple Silicon) | `bootstrap.sh` | `2.7.1` (PyPI) | No CUDA — torch's Mac wheels come from the default PyPI index (matches SA3's pin). Runs on **MPS**; no flash-attn (uses torch SDPA). Much slower than a GPU. |
 | **Windows x86_64** | `bootstrap.bat` | `2.7.1` (cu126) | flash-attn skipped (no maintained Windows wheel) → torch SDPA. Set `SA3_FLASH_WHEEL` to install one |
 
 ```bash
@@ -121,6 +126,35 @@ CUDA forward-compat; use `9.0` for GH200) `MAX_JOBS=4` `CUDA_HOME=/usr/local/cud
 > **Prerequisites on Windows:** a recent NVIDIA driver, [Git](https://git-scm.com)
 > (the install pulls `stable-audio-3` from GitHub), and either [`uv`](https://docs.astral.sh/uv/)
 > or a Python 3.10 install with the `py` launcher. PowerShell 5+ ships with Windows.
+
+---
+
+## macOS / Apple Silicon (MPS)
+
+SA3 runs on Apple Silicon (M-series) via PyTorch's **Metal (MPS)** backend. This
+is an **MVP-grade** target: it generates real foley, but expect generation to be
+**much slower** than on a discrete NVIDIA GPU (think tens of seconds for a short
+clip once the model is loaded, plus a one-time multi-GB model download). There is
+no flash-attn on macOS, so SA3 uses torch SDPA — which is correct here.
+
+```bash
+cd /path/to/OmniVoice-Manager/plugins
+git clone https://github.com/SanDiegoDude/omnivoice-manager-plugin-stable-audio-3 stable-audio-3
+cd stable-audio-3 && ./bootstrap.sh        # torch 2.7.1 from PyPI, no CUDA
+```
+
+Notes:
+
+- **Apple Silicon only.** Intel Macs have no MPS and no recent torch wheels — the
+  bootstrap warns and is effectively unsupported.
+- The sidecar selects the device automatically (`cuda → mps → cpu`) and runs in
+  full precision (fp16 is CUDA-only here). The plug-in's `health` reports the
+  chosen `device`.
+- A few model ops aren't implemented on MPS yet; the sidecar sets
+  `PYTORCH_ENABLE_MPS_FALLBACK=1` so those transparently fall back to CPU
+  (slower, not broken). Override the env var to `0` to disable.
+- Unified memory is shared with the OS, so very long takes can get tight. Start
+  with short durations and a low step count (the defaults are fine).
 
 ---
 

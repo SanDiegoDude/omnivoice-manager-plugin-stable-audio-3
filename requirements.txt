@@ -7,14 +7,19 @@
 #
 # Install with: ./bootstrap.sh  (handles the torch CUDA index + flash-attn)
 #
-# Platform matrix (chosen automatically by bootstrap.sh from `uname -m`):
-#   x86_64   torch==2.7.1 / torchaudio==2.7.1  (cu126 index) + flash-attn 2.6.3
-#            prebuilt wheel (cu126 / torch2.7 / cp310). Matches SA3's own pin.
-#   aarch64  torch==2.10.0 / torchaudio==2.10.0 (cu130 index) for NVIDIA
-#            Grace-Blackwell (GB10 "DGX Spark" / EdgeXpert, GH200). torch 2.7.x
-#            has no aarch64 CUDA wheels, so SA3 is installed with --no-deps to
-#            override its torch==2.7.1 pin; flash-attn is skipped (no aarch64
-#            wheel) and SA3 falls back to torch SDPA.
+# Platform matrix (chosen automatically by bootstrap.sh from `uname -s`/`uname -m`):
+#   Linux x86_64    torch==2.7.1 / torchaudio==2.7.1  (cu126 index) + flash-attn
+#                   2.6.3 prebuilt wheel (cu126 / torch2.7 / cp310). Matches SA3's
+#                   own pin.
+#   Linux aarch64   torch==2.10.0 / torchaudio==2.10.0 (cu130 index) for NVIDIA
+#                   Grace-Blackwell (GB10 "DGX Spark" / EdgeXpert, GH200). torch
+#                   2.7.x has no aarch64 CUDA wheels, so SA3 is installed with
+#                   --no-deps to override its torch==2.7.1 pin; flash-attn is
+#                   skipped (no aarch64 wheel) and SA3 falls back to torch SDPA.
+#   macOS arm64     torch==2.7.1 / torchaudio==2.7.1 from the DEFAULT PyPI index
+#                   (no CUDA on a Mac). Runs on the Metal (MPS) backend; no
+#                   flash-attn (torch SDPA). Apple Silicon only. Much slower than
+#                   an NVIDIA GPU — an MVP target.
 #
 # stable-audio-3 runtime deps (installed for you): einops, einops-exts, numpy,
 # packaging, safetensors, tqdm, huggingface-hub, transformers, soundfile.
